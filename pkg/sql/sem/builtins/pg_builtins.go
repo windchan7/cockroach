@@ -45,6 +45,7 @@ var typeBuiltinsHaveUnderscore = map[oid.Oid]struct{}{
 	types.Any.Oid():         {},
 	types.Date.Oid():        {},
 	types.Time.Oid():        {},
+	types.TimeTZ.Oid():      {},
 	types.Decimal.Oid():     {},
 	types.Interval.Oid():    {},
 	types.JSON.Oid():        {},
@@ -402,7 +403,7 @@ func evalPrivilegeCheck(
 	}
 	for _, p := range privChecks {
 		query := fmt.Sprintf(`
-			SELECT bool_or(privilege_type IN ('%s', '%s')) IS TRUE 
+			SELECT bool_or(privilege_type IN ('%s', '%s')) IS TRUE
 			FROM information_schema.%s WHERE grantee = $1 AND %s`,
 			privilege.ALL, p, infoTable, pred)
 		r, err := ctx.Planner.QueryRow(ctx.Ctx(), query, user)

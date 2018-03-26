@@ -1,0 +1,1013 @@
+index 4fc3e9f6e..8904bfc81
+--- a/pkg/cli/dump.go
++++ b/pkg/cli/dump.go
+@@ -563,6 +563,8 @@ func dumpTableData(w io.Writer, conn *sqlConn, clusterTS string, bmd basicMetada
+ 					case "TIME":
+ 						// pq awkwardly represents TIME as a time.Time with date 0000-01-01.
+ 						d = tree.MakeDTime(timeofday.FromTime(t))
++					case "TIME WITH TIME ZONE":
++						d = tree.MakeDTimeTZ(timeofday,FromTime(t), t.Location())
+ 					case "TIMESTAMP":
+ 						d = tree.MakeDTimestamp(t, time.Nanosecond)
+ 					case "TIMESTAMP WITH TIME ZONE":
+
+index 8b23a94f2..768f1c3c0
+--- a/pkg/internal/rsg/rsg.go
++++ b/pkg/internal/rsg/rsg.go
+@@ -250,6 +250,10 @@ func (r *RSG) GenerateRandomArg(typ types.T) string {
+ 		i := r.Int63n(int64(timeofday.Max))
+ 		d := tree.MakeDTime(timeofday.FromInt(i))
+ 		v = fmt.Sprintf(`'%s'`, d)
++	case types.TimeTZ:
++		i := r.Int63n(int64(timeofday.Max))
++		d := tree.MakeDTimeTZ(timeofday.FromInt(i), time.UTC)
++		v = fmt.Sprintf(`'%s'`, d)
+ 	case types.Interval:
+ 		d := duration.Duration{Nanos: r.Int63()}
+ 		v = fmt.Sprintf(`'%s'`, &tree.DInterval{Duration: d})
+
+index 54908f12c..8b2a39b10
+--- a/pkg/sql/coltypes/aliases.go
++++ b/pkg/sql/coltypes/aliases.go
+@@ -77,6 +77,9 @@ var (
+ 	// Time is an immutable T instance.
+ 	Time = &TTime{}
+
++	// TimeTZ is an immutable T instance.
++	TimeTZ = &TTimeTZ{}
++
+ 	// Timestamp is an immutable T instance.
+ 	Timestamp = &TTimestamp{}
+ 	// TimestampWithTZ is an immutable T instance.
+
+
+index cbf198488..ed0e43b9c
+--- a/pkg/sql/coltypes/conv.go
++++ b/pkg/sql/coltypes/conv.go
+@@ -92,6 +92,8 @@ func DatumTypeToColumnType(t types.T) (T, error) {
+ 		return Date, nil
+ 	case types.Time:
+ 		return Time, nil
++	case types.TimeTZ:
++		return TimeTZ, nil
+ 	case types.String:
+ 		return String, nil
+ 	case types.Name:
+@@ -146,6 +148,8 @@ func CastTargetToDatumType(t CastTargetType) types.T {
+ 		return types.Date
+ 	case *TTime:
+ 		return types.Time
++	case *TTimeTZ:
++		return types.TimeTZ
+ 	case *TTimestamp:
+ 		return types.Timestamp
+ 	case *TTimestampTZ:
+
+index 444a323f6..9cc830ea2
+--- a/pkg/sql/coltypes/interface.go
++++ b/pkg/sql/coltypes/interface.go
+@@ -53,6 +53,7 @@ func (*TFloat) columnType()          {}
+ func (*TDecimal) columnType()        {}
+ func (*TDate) columnType()           {}
+ func (*TTime) columnType()           {}
++func (*TTimeTZ) columnType()         {}
+ func (*TTimestamp) columnType()      {}
+ func (*TTimestampTZ) columnType()    {}
+ func (*TInterval) columnType()       {}
+@@ -74,6 +75,7 @@ func (*TFloat) castTargetType()          {}
+ func (*TDecimal) castTargetType()        {}
+ func (*TDate) castTargetType()           {}
+ func (*TTime) castTargetType()           {}
++func (*TTimeTZ) castTargetType()         {}
+ func (*TTimestamp) castTargetType()      {}
+ func (*TTimestampTZ) castTargetType()    {}
+ func (*TInterval) castTargetType()       {}
+@@ -94,6 +96,7 @@ func (node *TFloat) String() string          { return ColTypeAsString(node) }
+ func (node *TDecimal) String() string        { return ColTypeAsString(node) }
+ func (node *TDate) String() string           { return ColTypeAsString(node) }
+ func (node *TTime) String() string           { return ColTypeAsString(node) }
++func (node *TTimeTZ) String() string         { return ColTypeAsString(node) }
+ func (node *TTimestamp) String() string      { return ColTypeAsString(node) }
+ func (node *TTimestampTZ) String() string    { return ColTypeAsString(node) }
+ func (node *TInterval) String() string       { return ColTypeAsString(node) }
+
+index ef19eb09b..646b11801
+--- a/pkg/sql/coltypes/timedate.go
++++ b/pkg/sql/coltypes/timedate.go
+@@ -36,6 +36,14 @@ func (node *TTime) Format(buf *bytes.Buffer, f lex.EncodeFlags) {
+ 	buf.WriteString("TIME")
+ }
+
++// TTimeTZ represents a TIMETZ type.
++type TTimeTZ struct{}
++
++// Format implements the ColTypeFormatter interface.
++func (node *TTimeTZ) Format(buf *bytes.Buffer, f lex.EncodeFlags) {
++	buf.WriteString("TIME WITH TIME ZONE")
++}
++
+ // TTimestamp represents a TIMESTAMP type.
+ type TTimestamp struct{}
+
+
+index 0dcb9ccf7..a3ec6ea2d
+--- a/pkg/sql/executor.go
++++ b/pkg/sql/executor.go
+@@ -2420,6 +2420,7 @@ func checkResultType(typ types.T) error {
+ 	case types.String:
+ 	case types.Date:
+ 	case types.Time:
++	case types.TimeTZ:
+ 	case types.Timestamp:
+ 	case types.TimestampTZ:
+ 	case types.Interval:
+
+index 00b37c809..033100a33
+--- a/pkg/sql/parser/parse.go
++++ b/pkg/sql/parser/parse.go
+@@ -191,6 +191,8 @@ func ParseStringAs(
+ 		d = tree.NewDString(s)
+ 	case types.Time:
+ 		d, err = tree.ParseDTime(s)
++	case types.TimeTZ:
++		d, err = tree.ParseDTimeTZ(s, evalCtx.GetLocation())
+ 	case types.Timestamp:
+ 		d, err = tree.ParseDTimestamp(s, time.Microsecond)
+ 	case types.TimestampTZ:
+
+index 9623e66d4..8137695be
+--- a/pkg/sql/parser/sql.y
++++ b/pkg/sql/parser/sql.y
+@@ -522,7 +522,7 @@ func newNameFromStr(s string) *tree.Name {
+ %token <str>   SYMMETRIC SYNTAX SYSTEM
+
+ %token <str>   TABLE TABLES TEMP TEMPLATE TEMPORARY TESTING_RANGES TESTING_RELOCATE TEXT THAN THEN
+-%token <str>   TIME TIMESTAMP TIMESTAMPTZ TO TRAILING TRACE TRANSACTION TREAT TRIM TRUE
++%token <str>   TIME TIMETZ TIMESTAMP TIMESTAMPTZ TO TRAILING TRACE TRANSACTION TREAT TRIM TRUE
+ %token <str>   TRUNCATE TYPE
+
+ %token <str>   UNBOUNDED UNCOMMITTED UNION UNIQUE UNKNOWN
+@@ -5684,6 +5684,14 @@ const_datetime:
+   {
+     $$.val = coltypes.Time
+   }
++| TIMETZ
++  {
++    $$.val = coltypes.TimeTZ
++  }
++| TIME WITH TIME ZONE
++  {
++    $$.val = coltypes.TimeTZ
++  }
+ | TIMESTAMP
+   {
+     $$.val = coltypes.Timestamp
+@@ -7666,6 +7674,7 @@ col_name_keyword:
+ | STRING
+ | SUBSTRING
+ | TIME
++| TIMETZ
+ | TIMESTAMP
+ | TIMESTAMPTZ
+ | TREAT
+
+index 7967133c4..f2e436962
+--- a/pkg/sql/pg_catalog.go
++++ b/pkg/sql/pg_catalog.go
+@@ -1924,6 +1924,7 @@ var datumToTypeCategory = map[reflect.Type]*tree.DString{
+ 	reflect.TypeOf(types.Bytes):       typCategoryUserDefined,
+ 	reflect.TypeOf(types.Date):        typCategoryDateTime,
+ 	reflect.TypeOf(types.Time):        typCategoryDateTime,
++	reflect.TypeOf(types.TimeTZ):      typCategoryDateTime,
+ 	reflect.TypeOf(types.Float):       typCategoryNumeric,
+ 	reflect.TypeOf(types.Int):         typCategoryNumeric,
+ 	reflect.TypeOf(types.Interval):    typCategoryTimespan,
+
+index 738215548..5f9824720
+--- a/pkg/sql/pgwire/pgwirebase/encoding.go
++++ b/pkg/sql/pgwire/pgwirebase/encoding.go
+@@ -267,6 +267,12 @@ func DecodeOidDatum(id oid.Oid, code FormatCode, b []byte) (tree.Datum, error) {
+ 				return nil, errors.Errorf("could not parse string %q as time", b)
+ 			}
+ 			return d, nil
++		case oid.T_timetz:
++			d, err := tree.ParseDTimeTZ(string(b), time.UTC)
++			if err != nil {
++				return nil, errors.Errorf("could not parse string %q as timetz", b)
++			}
++			return d, nil
+ 		case oid.T_interval:
+ 			d, err := tree.ParseDInterval(string(b))
+ 			if err != nil {
+@@ -478,6 +484,15 @@ func DecodeOidDatum(id oid.Oid, code FormatCode, b []byte) (tree.Datum, error) {
+ 			}
+ 			i := int64(binary.BigEndian.Uint64(b))
+ 			return tree.MakeDTime(timeofday.TimeOfDay(i)), nil
++		case oid.T_timetz:
++			if len(b) < 8 {
++				return nil, errors.Errorf("timetz requires 8 bytes for binary format")
++			}
++			i := int64(binary.BigEndian.Uint64(b))
++			t := pgBinaryToTime(i)
++			tod := timeofday.FromTime(t)
++			location, _ := t.Location()
++			return tree.MakeDTimeTZ(tod, location), nil
+ 		case oid.T_uuid:
+ 			u, err := tree.ParseDUuidFromBytes(b)
+ 			if err != nil {
+
+index d2efa4f22..1cbfa52cc
+--- a/pkg/sql/pgwire/types.go
++++ b/pkg/sql/pgwire/types.go
+@@ -133,6 +133,12 @@ func (b *writeBuffer) writeTextDatum(ctx context.Context, d tree.Datum, sessionL
+ 		b.putInt32(int32(len(s)))
+ 		b.write(s)
+
++	case *tree.DTimeTZ:
++		// Start at offset 4 because `putInt32` clobbers the first 4 bytes.
++		s := formatTimeTZ(v, sessionLoc, b.putbuf[4:4])
++		b.putInt32(int32(len(s)))
++		b.write(s)
++
+ 	case *tree.DTimestamp:
+ 		// Start at offset 4 because `putInt32` clobbers the first 4 bytes.
+ 		s := formatTs(v.Time, nil, b.putbuf[4:4])
+@@ -354,6 +360,10 @@ func (b *writeBuffer) writeBinaryDatum(
+ 		b.putInt32(8)
+ 		b.putInt64(int64(*v))
+
++	case *tree.DTimeTZ:
++		b.putInt32(8)
++		b.putInt64(timeToPgBinary(v.ToTime(), sessionLoc))
++
+ 	case *tree.DArray:
+ 		if v.ParamTyp.FamilyEqual(types.AnyArray) {
+ 			b.setError(errors.New("unsupported binary serialization of multidimensional arrays"))
+@@ -391,6 +401,7 @@ func (b *writeBuffer) writeBinaryDatum(
+ }
+
+ const pgTimeFormat = "15:04:05.999999"
++const pgTimeTSFormat = pgTimeFormat + "-07:00"
+ const pgTimeStampFormatNoOffset = "2006-01-02 " + pgTimeFormat
+ const pgTimeStampFormat = pgTimeStampFormatNoOffset + "-07:00"
+
+@@ -401,6 +412,17 @@ func formatTime(t timeofday.TimeOfDay, tmp []byte) []byte {
+ 	return t.ToTime().AppendFormat(tmp, pgTimeFormat)
+ }
+
++// formatTimeTZ formats ttz into a format lib/pq understands, appending to the
++// provided tmp buffer and reallocating if needed. The function will then return
++// the resulting buffer.
++func formatTimeTZ(ttz *DTimeTZ, offset *time.Location, tmp []byte) []byte {
++	t := ttz.ToTime()
++	if offset != nil {
++		t = t.In(offset)
++	}
++	return t.AppendFormat(tmp, pgTimeTSFormat)
++}
++
+ // formatTs formats t with an optional offset into a format lib/pq understands,
+ // appending to the provided tmp buffer and reallocating if needed. The function
+ // will then return the resulting buffer. formatTs is mostly cribbed from
+
+index a246a6582..82a8d5c46
+--- a/pkg/sql/sem/builtins/builtins.go
++++ b/pkg/sql/sem/builtins/builtins.go
+@@ -1393,6 +1393,19 @@ CockroachDB supports the following flags:
+ 			Info: "Extracts `element` from `input`.\n\n" +
+ 				"Compatible elements: hour, minute, second, millisecond, microsecond, epoch",
+ 		},
++		tree.Builtin{
++				Types:      tree.ArgTypes{{"element", types.String}, {"input", types.TimeTZ}},
++				ReturnType: tree.FixedReturnType(types.Int),
++				Category:   categoryDateAndTime,
++				Fn: func(ctx *tree.EvalContext, args tree.Datums) (tree.Datum, error) {
++					fromTimeTZ := args[1].(*tree.DTimeTZ)
++					fromTime := tree.MakeDTime(fromTimeTZ.TimeOfDay)
++					timeSpan := strings.ToLower(string(tree.MustBeDString(args[0])))
++					return extractStringFromTime(fromTime, timeSpan)
++				},
++				Info: "Extracts `element` from `input`.\n\n" +
++					"Compatible elements: hour, minute, second, millisecond, microsecond, epoch",
++		},
+ 	},
+
+ 	"extract_duration": {
+
+index 63a98c0d9..458c6dbd7
+--- a/pkg/sql/sem/builtins/pg_builtins.go
++++ b/pkg/sql/sem/builtins/pg_builtins.go
+@@ -45,6 +45,7 @@ var typeBuiltinsHaveUnderscore = map[oid.Oid]struct{}{
+ 	types.Any.Oid():         {},
+ 	types.Date.Oid():        {},
+ 	types.Time.Oid():        {},
++	types.TimeTZ.Oid():      {},
+ 	types.Decimal.Oid():     {},
+ 	types.Interval.Oid():    {},
+ 	types.JSON.Oid():        {},
+@@ -402,7 +403,7 @@ func evalPrivilegeCheck(
+ 	}
+ 	for _, p := range privChecks {
+ 		query := fmt.Sprintf(`
+-			SELECT bool_or(privilege_type IN ('%s', '%s')) IS TRUE
++			SELECT bool_or(privilege_type IN ('%s', '%s')) IS TRUE
+ 			FROM information_schema.%s WHERE grantee = $1 AND %s`,
+ 			privilege.ALL, p, infoTable, pred)
+ 		r, err := ctx.Planner.QueryRow(ctx.Ctx(), query, user)
+
+index 70bb1f211..c6966848b
+--- a/pkg/sql/sem/tree/constant.go
++++ b/pkg/sql/sem/tree/constant.go
+@@ -390,6 +390,7 @@ var (
+ 		types.Decimal,
+ 		types.Date,
+ 		types.Time,
++		types.TimeTZ,
+ 		types.Timestamp,
+ 		types.TimestampTZ,
+ 		types.Interval,
+@@ -475,6 +476,8 @@ func (expr *StrVal) ResolveAsType(ctx *SemaContext, typ types.T) (Datum, error)
+ 		return ParseDDate(expr.s, ctx.getLocation())
+ 	case types.Time:
+ 		return ParseDTime(expr.s)
++	case types.TimeTZ:
++		return ParseDTimeTZ(expr.s, ctx.getLocation())
+ 	case types.INet:
+ 		return ParseDIPAddrFromINetString(expr.s)
+ 	case types.JSON:
+
+index 097b47ff7..adcba4278
+--- a/pkg/sql/sem/tree/datum.go
++++ b/pkg/sql/sem/tree/datum.go
+@@ -1619,6 +1619,134 @@ func (d *DTime) Size() uintptr {
+ 	return unsafe.Sizeof(*d)
+ }
+
++// DTimeTZ is the time with time zone Datum.
++type DTimeTZ struct {
++	timeofday.TimeOfDay
++	*time.Location
++}
++
++// ToTime converts a DTimeTZ to a time.Time, using the Unix epoch as the date.
++func (d *DTimeTZ) ToTime() time.Time {
++	t := d.TimeOfDay.ToTime().In(d.Location)
++	tSeconds := t.Unix() * int64(time.Second)
++	_, tOffset := t.Zone()
++	tNanos := int64(t.Nanosecond())
++	nanos := tSeconds - int64(tOffset) * int64(time.Second) + tNanos
++	return time.Unix(0, nanos).In(d.Location)
++}
++
++func (d *DTimeTZ) Simplify() string {
++	ds := d.ToTime().String()
++
++	// Get the time zone information, eg. -05
++	tz := strings.Split(ds, " ")[2][0:3]
++	tod := timeofday.TimeOfDay(d.TimeOfDay).String()
++	return tod + tz
++}
++
++// MakeDTimeTZ creates a DTimeTZ from a TimeOfDay and time.Location.
++func MakeDTimeTZ(t timeofday.TimeOfDay, loc *time.Location) *DTimeTZ {
++	d := DTimeTZ{t, loc};
++	return &d
++}
++
++// ParseDTimeTZ parses and returns the *DTime Datum value represented by the
++// provided string, or an error if parsing is unsuccessful.
++func ParseDTimeTZ(s string, loc *time.Location) (*DTimeTZ, error) {
++	t, err := parseTimestampInLocation("1970-01-01 "+s, loc, types.TimeTZ)
++	if err != nil {
++		// Build our own error message to avoid exposing the dummy date.
++		return nil, makeParseError(s, types.TimeTZ, nil)
++	}
++	return MakeDTimeTZ(timeofday.FromTime(t), loc), nil
++}
++
++// ResolvedType implements the TypedExpr interface.
++func (*DTimeTZ) ResolvedType() types.T {
++	return types.TimeTZ
++}
++
++// Compare implements the Datum interface.
++func (d *DTimeTZ) Compare(ctx *EvalContext, other Datum) int {
++	if other == DNull {
++		// NULL is less than any non-NULL value.
++		return 1
++	}
++	v, ok := other.(*DTimeTZ)
++	if !ok {
++		panic(makeUnsupportedComparisonMessage(d, other))
++	}
++
++	dTime := d.ToTime()
++	vTime := v.ToTime()
++
++	if dTime.Before(vTime) {
++		return -1
++	}
++	if vTime.Before(dTime) {
++		return 1
++	}
++	return 0
++}
++
++// Prev implements the Datum interface.
++func (d *DTimeTZ) Prev(_ *EvalContext) (Datum, bool) {
++	prev := DTimeTZ{d.TimeOfDay - 1, d.Location}
++	return &prev, true
++}
++
++// Next implements the Datum interface.
++func (d *DTimeTZ) Next(_ *EvalContext) (Datum, bool) {
++	next := DTimeTZ{d.TimeOfDay + 1, d.Location}
++	return &next, true
++}
++
++// IsMax implements the Datum interface.
++func (d *DTimeTZ) IsMax(_ *EvalContext) bool {
++	t := d.ToTime()
++	tNext := t.Add(time.Microsecond)
++	return t.After(tNext)
++}
++
++// IsMin implements the Datum interface.
++func (d *DTimeTZ) IsMin(_ *EvalContext) bool {
++	t := d.ToTime()
++	tPrev := t.Add(-time.Microsecond)
++	return t.Before(tPrev)
++}
++
++// Max implements the Datum interface.
++func (d *DTimeTZ) Max(_ *EvalContext) (Datum, bool) {
++	return nil, false
++}
++
++// Min implements the Datum interface.
++func (d *DTimeTZ) Min(_ *EvalContext) (Datum, bool) {
++	return nil, false
++}
++
++// AmbiguousFormat implements the Datum interface.
++func (*DTimeTZ) AmbiguousFormat() bool { return false }
++
++// Format implements the NodeFormatter interface.
++func (d *DTimeTZ) Format(ctx *FmtCtx) {
++	f := ctx.flags
++	bareStrings := f.HasFlags(FmtFlags(lex.EncBareStrings))
++	if !bareStrings {
++		ctx.WriteByte('\'')
++	}
++	ctx.WriteString(d.Simplify())
++	if !bareStrings {
++		ctx.WriteByte('\'')
++	}
++}
++
++// Size implements the Datum interface.
++func (d *DTimeTZ) Size() uintptr {
++	return unsafe.Sizeof(*d)
++}
++
++
+ // DTimestamp is the timestamp Datum.
+ type DTimestamp struct {
+ 	time.Time
+@@ -3266,6 +3394,7 @@ var baseDatumTypeSizes = map[types.T]struct {
+ 	types.Bytes:       {unsafe.Sizeof(DBytes("")), variableSize},
+ 	types.Date:        {unsafe.Sizeof(DDate(0)), fixedSize},
+ 	types.Time:        {unsafe.Sizeof(DTime(0)), fixedSize},
++	types.TimeTZ:      {unsafe.Sizeof(DTimeTZ{}), fixedSize},
+ 	types.Timestamp:   {unsafe.Sizeof(DTimestamp{}), fixedSize},
+ 	types.TimestampTZ: {unsafe.Sizeof(DTimestampTZ{}), fixedSize},
+ 	types.Interval:    {unsafe.Sizeof(DInterval{}), fixedSize},
+
+index 4793d338f..be612f0b4
+--- a/pkg/sql/sem/tree/eval.go
++++ b/pkg/sql/sem/tree/eval.go
+@@ -544,6 +544,64 @@ var BinOps = map[BinaryOperator]binOpOverload{
+ 				return MakeDTime(t.Add(left.(*DInterval).Duration)), nil
+ 			},
+ 		},
++		BinOp{
++			LeftType:   types.Date,
++			RightType:  types.TimeTZ,
++			ReturnType: types.TimestampTZ,
++			fn: func(_ *EvalContext, left Datum, right Datum) (Datum, error) {
++				d := MakeDTimestampTZFromDate(right.(*DTimeTZ).Location, left.(*DDate))
++				t := time.Duration(right.(*DTimeTZ).TimeOfDay) * time.Microsecond
++				return MakeDTimestampTZ(d.Add(t), time.Microsecond), nil
++			},
++		},
++		BinOp{
++			LeftType:   types.TimeTZ,
++			RightType:  types.Date,
++			ReturnType: types.TimestampTZ,
++			fn: func(_ *EvalContext, left Datum, right Datum) (Datum, error) {
++				d := MakeDTimestampTZFromDate(left.(*DTimeTZ).Location, right.(*DDate))
++				t := time.Duration(left.(*DTimeTZ).TimeOfDay) * time.Microsecond
++				return MakeDTimestampTZ(d.Add(t), time.Microsecond), nil
++			},
++		},
++		BinOp{
++			LeftType:   types.TimeTZ,
++			RightType:  types.Interval,
++			ReturnType: types.TimeTZ,
++			fn: func(_ *EvalContext, left Datum, right Datum) (Datum, error) {
++				t := timeofday.TimeOfDay(left.(*DTimeTZ).TimeOfDay)
++				return MakeDTimeTZ(t.Add(right.(*DInterval).Duration), left.(*DTimeTZ).Location), nil
++			},
++		},
++		BinOp{
++			LeftType:   types.Interval,
++			RightType:  types.TimeTZ,
++			ReturnType: types.Time,
++			fn: func(_ *EvalContext, left Datum, right Datum) (Datum, error) {
++				t := timeofday.TimeOfDay(right.(*DTimeTZ).TimeOfDay)
++				return MakeDTimeTZ(t.Add(left.(*DInterval).Duration), right.(*DTimeTZ).Location), nil
++			},
++		},
++		BinOp{
++			LeftType:   types.TimeTZ,
++			RightType:  types.Time,
++			ReturnType: types.TimeTZ,
++			fn: func(_ *EvalContext, left Datum, right Datum) (Datum, error) {
++				t1 := timeofday.TimeOfDay(left.(*DTimeTZ).TimeOfDay)
++				t2 := timeofday.TimeOfDay(*right.(*DTime))
++				return MakeDTimeTZ(timeofday.Sum(t1, t2), left.(*DTimeTZ).Location), nil
++			},
++		},
++		BinOp{
++			LeftType:   types.Time,
++			RightType:  types.TimeTZ,
++			ReturnType: types.TimeTZ,
++			fn: func(_ *EvalContext, left Datum, right Datum) (Datum, error) {
++				t1 := timeofday.TimeOfDay(right.(*DTimeTZ).TimeOfDay)
++				t2 := timeofday.TimeOfDay(*left.(*DTime))
++				return MakeDTimeTZ(timeofday.Sum(t1, t2), right.(*DTimeTZ).Location), nil
++			},
++		},
+ 		BinOp{
+ 			LeftType:   types.Timestamp,
+ 			RightType:  types.Interval,
+@@ -729,6 +787,26 @@ var BinOps = map[BinaryOperator]binOpOverload{
+ 				return &DInterval{Duration: diff}, nil
+ 			},
+ 		},
++		BinOp{
++			LeftType:   types.TimeTZ,
++			RightType:  types.Time,
++			ReturnType: types.TimeTZ,
++			fn: func(_ *EvalContext, left Datum, right Datum) (Datum, error) {
++				t1 := left.(*DTimeTZ).TimeOfDay
++				t2 := timeofday.TimeOfDay(*right.(*DTime))
++				diff := timeofday.Difference(t1, t2)
++				return MakeDTimeTZ(t1.Add(diff.Mul(-1)), left.(*DTimeTZ).Location), nil
++			},
++		},
++		BinOp{
++			LeftType:   types.TimeTZ,
++			RightType:  types.Interval,
++			ReturnType: types.TimeTZ,
++			fn: func(_ *EvalContext, left Datum, right Datum) (Datum, error) {
++				t := left.(*DTimeTZ).TimeOfDay
++				return MakeDTimeTZ(t.Add(right.(*DInterval).Duration.Mul(-1)), left.(*DTimeTZ).Location), nil
++			},
++		},
+ 		BinOp{
+ 			LeftType:   types.Timestamp,
+ 			RightType:  types.Timestamp,
+@@ -1599,6 +1677,7 @@ var CmpOps = map[ComparisonOperator]cmpOpOverload{
+ 		makeEqFn(types.Oid, types.Oid),
+ 		makeEqFn(types.String, types.String),
+ 		makeEqFn(types.Time, types.Time),
++		makeEqFn(types.TimeTZ, types.TimeTZ),
+ 		makeEqFn(types.Timestamp, types.Timestamp),
+ 		makeEqFn(types.TimestampTZ, types.TimestampTZ),
+ 		makeEqFn(types.UUID, types.UUID),
+@@ -1641,6 +1720,7 @@ var CmpOps = map[ComparisonOperator]cmpOpOverload{
+ 		makeLtFn(types.Oid, types.Oid),
+ 		makeLtFn(types.String, types.String),
+ 		makeLtFn(types.Time, types.Time),
++		makeLtFn(types.TimeTZ, types.TimeTZ),
+ 		makeLtFn(types.Timestamp, types.Timestamp),
+ 		makeLtFn(types.TimestampTZ, types.TimestampTZ),
+ 		makeLtFn(types.UUID, types.UUID),
+@@ -1683,6 +1763,7 @@ var CmpOps = map[ComparisonOperator]cmpOpOverload{
+ 		makeLeFn(types.Oid, types.Oid),
+ 		makeLeFn(types.String, types.String),
+ 		makeLeFn(types.Time, types.Time),
++		makeLeFn(types.TimeTZ, types.TimeTZ),
+ 		makeLeFn(types.Timestamp, types.Timestamp),
+ 		makeLeFn(types.TimestampTZ, types.TimestampTZ),
+ 		makeLeFn(types.UUID, types.UUID),
+@@ -1734,6 +1815,7 @@ var CmpOps = map[ComparisonOperator]cmpOpOverload{
+ 		makeIsFn(types.Oid, types.Oid),
+ 		makeIsFn(types.String, types.String),
+ 		makeIsFn(types.Time, types.Time),
++		makeIsFn(types.TimeTZ, types.TimeTZ),
+ 		makeIsFn(types.Timestamp, types.Timestamp),
+ 		makeIsFn(types.TimestampTZ, types.TimestampTZ),
+ 		makeIsFn(types.UUID, types.UUID),
+@@ -1780,6 +1862,7 @@ var CmpOps = map[ComparisonOperator]cmpOpOverload{
+ 		makeEvalTupleIn(types.Oid),
+ 		makeEvalTupleIn(types.String),
+ 		makeEvalTupleIn(types.Time),
++		makeEvalTupleIn(types.TimeTZ),
+ 		makeEvalTupleIn(types.Timestamp),
+ 		makeEvalTupleIn(types.TimestampTZ),
+ 		makeEvalTupleIn(types.UUID),
+@@ -2882,7 +2965,7 @@ func PerformCast(ctx *EvalContext, d Datum, t coltypes.CastTargetType) (Datum, e
+ 		switch t := d.(type) {
+ 		case *DBool, *DInt, *DFloat, *DDecimal, dNull:
+ 			s = d.String()
+-		case *DTimestamp, *DTimestampTZ, *DDate, *DTime:
++		case *DTimestamp, *DTimestampTZ, *DDate, *DTime, *DTimeTZ:
+ 			s = AsStringWithFlags(d, FmtBareStrings)
+ 		case *DInterval:
+ 			// When converting an interval to string, we need a string representation
+@@ -2980,6 +3063,8 @@ func PerformCast(ctx *EvalContext, d Datum, t coltypes.CastTargetType) (Datum, e
+ 			return ParseDTime(d.Contents)
+ 		case *DTime:
+ 			return d, nil
++		case *DTimeTZ:
++			return MakeDTime(d.TimeOfDay), nil
+ 		case *DTimestamp:
+ 			return MakeDTime(timeofday.FromTime(d.Time)), nil
+ 		case *DTimestampTZ:
+@@ -2988,6 +3073,20 @@ func PerformCast(ctx *EvalContext, d Datum, t coltypes.CastTargetType) (Datum, e
+ 			return MakeDTime(timeofday.Min.Add(d.Duration)), nil
+ 		}
+
++	case *coltypes.TTimeTZ:
++		switch d := d.(type) {
++		case *DString:
++			return ParseDTimeTZ(string(*d), ctx.GetLocation())
++		case *DCollatedString:
++			return ParseDTimeTZ(d.Contents, ctx.GetLocation())
++		case *DTime:
++			return MakeDTimeTZ(timeofday.TimeOfDay(*d), ctx.GetLocation()), nil
++		case *DTimeTZ:
++			return d, nil
++		case *DTimestampTZ:
++			return MakeDTimeTZ(timeofday.FromTime(d.Time), d.Time.Location()), nil
++		}
++
+ 	case *coltypes.TTimestamp:
+ 		// TODO(knz): Timestamp from float, decimal.
+ 		switch d := d.(type) {
+@@ -3591,6 +3690,11 @@ func (t *DTime) Eval(_ *EvalContext) (Datum, error) {
+ 	return t, nil
+ }
+
++// Eval implements the TypedExpr interface.
++func (t *DTimeTZ) Eval(_ *EvalContext) (Datum, error) {
++	return t, nil
++}
++
+ // Eval implements the TypedExpr interface.
+ func (t *DFloat) Eval(_ *EvalContext) (Datum, error) {
+ 	return t, nil
+
+index 4779a090c..169371027
+--- a/pkg/sql/sem/tree/expr.go
++++ b/pkg/sql/sem/tree/expr.go
+@@ -1287,10 +1287,11 @@ var (
+ 	decimalCastTypes = []types.T{types.Unknown, types.Bool, types.Int, types.Float, types.Decimal, types.String, types.FamCollatedString,
+ 		types.Timestamp, types.TimestampTZ, types.Date, types.Interval}
+ 	stringCastTypes = []types.T{types.Unknown, types.Bool, types.Int, types.Float, types.Decimal, types.String, types.FamCollatedString,
+-		types.Bytes, types.Timestamp, types.TimestampTZ, types.Interval, types.UUID, types.Date, types.Time, types.Oid, types.INet}
++		types.Bytes, types.Timestamp, types.TimestampTZ, types.Interval, types.UUID, types.Date, types.Time, types.TimeTZ, types.Oid, types.INet}
+ 	bytesCastTypes     = []types.T{types.Unknown, types.String, types.FamCollatedString, types.Bytes, types.UUID}
+ 	dateCastTypes      = []types.T{types.Unknown, types.String, types.FamCollatedString, types.Date, types.Timestamp, types.TimestampTZ, types.Int}
+-	timeCastTypes      = []types.T{types.Unknown, types.String, types.FamCollatedString, types.Time, types.Timestamp, types.TimestampTZ, types.Interval}
++	timeCastTypes      = []types.T{types.Unknown, types.String, types.FamCollatedString, types.Time, types.TimeTZ, types.Timestamp, types.TimestampTZ, types.Interval}
++	timetzCastTypes    = []types.T{types.Unknown, types.String, types.FamCollatedString, types.Time, types.TimeTZ, types.TimestampTZ}
+ 	timestampCastTypes = []types.T{types.Unknown, types.String, types.FamCollatedString, types.Date, types.Timestamp, types.TimestampTZ, types.Int}
+ 	intervalCastTypes  = []types.T{types.Unknown, types.String, types.FamCollatedString, types.Int, types.Time, types.Interval}
+ 	oidCastTypes       = []types.T{types.Unknown, types.String, types.FamCollatedString, types.Int, types.Oid}
+@@ -1319,6 +1320,8 @@ func validCastTypes(t types.T) []types.T {
+ 		return dateCastTypes
+ 	case types.Time:
+ 		return timeCastTypes
++	case types.TimeTZ:
++		return timetzCastTypes
+ 	case types.Timestamp, types.TimestampTZ:
+ 		return timestampCastTypes
+ 	case types.Interval:
+@@ -1443,6 +1446,7 @@ func (node *DBool) String() string            { return AsString(node) }
+ func (node *DBytes) String() string           { return AsString(node) }
+ func (node *DDate) String() string            { return AsString(node) }
+ func (node *DTime) String() string            { return AsString(node) }
++func (node *DTimeTZ) String() string          { return AsString(node) }
+ func (node *DDecimal) String() string         { return AsString(node) }
+ func (node *DFloat) String() string           { return AsString(node) }
+ func (node *DInt) String() string             { return AsString(node) }
+
+index d20e6ca60..07d0d91cf
+--- a/pkg/sql/sem/tree/parse_array.go
++++ b/pkg/sql/sem/tree/parse_array.go
+@@ -171,6 +171,8 @@ func StringToColType(s string) (coltypes.T, error) {
+ 		return coltypes.Date, nil
+ 	case "TIME":
+ 		return coltypes.Time, nil
++	case "TIMETZ", "TIME WITH TIME ZONE":
++		return coltypes.TimeTZ, nil
+ 	case "STRING":
+ 		return coltypes.String, nil
+ 	case "NAME":
+
+index 56c2633d0..2d304f7a5
+--- a/pkg/sql/sem/tree/type_check.go
++++ b/pkg/sql/sem/tree/type_check.go
+@@ -298,7 +298,7 @@ func (expr *CastExpr) TypeCheck(ctx *SemaContext, _ types.T) (TypedExpr, error)
+ 			// If the type doesn't have any possible parameters (like length,
+ 			// precision), the CastExpr becomes a no-op and can be elided.
+ 			switch expr.Type.(type) {
+-			case *coltypes.TBool, *coltypes.TDate, *coltypes.TTime, *coltypes.TTimestamp, *coltypes.TTimestampTZ,
++			case *coltypes.TBool, *coltypes.TDate, *coltypes.TTime, *coltypes.TTimeTZ, *coltypes.TTimestamp, *coltypes.TTimestampTZ,
+ 				*coltypes.TInterval, *coltypes.TBytes:
+ 				return expr.Expr.TypeCheck(ctx, returnType)
+ 			}
+@@ -924,6 +924,10 @@ func (d *DDate) TypeCheck(_ *SemaContext, _ types.T) (TypedExpr, error) { return
+ // identity function for Datum.
+ func (d *DTime) TypeCheck(_ *SemaContext, _ types.T) (TypedExpr, error) { return d, nil }
+
++// TypeCheck implements the Expr interface. It is implemented as an idempotent
++// identity function for Datum.
++func (d *DTimeTZ) TypeCheck(_ *SemaContext, _ types.T) (TypedExpr, error) { return d, nil }
++
+ // TypeCheck implements the Expr interface. It is implemented as an idempotent
+ // identity function for Datum.
+ func (d *DTimestamp) TypeCheck(_ *SemaContext, _ types.T) (TypedExpr, error) { return d, nil }
+
+index 7bc054be0..b0f3ec97f
+--- a/pkg/sql/sem/tree/walk.go
++++ b/pkg/sql/sem/tree/walk.go
+@@ -519,6 +519,9 @@ func (expr *DDate) Walk(_ Visitor) Expr { return expr }
+ // Walk implements the Expr interface.
+ func (expr *DTime) Walk(_ Visitor) Expr { return expr }
+
++// Walk implements the Expr interface.
++func (expr *DTimeTZ) Walk(_ Visitor) Expr { return expr }
++
+ // Walk implements the Expr interface.
+ func (expr *DFloat) Walk(_ Visitor) Expr { return expr }
+
+
+index 47b333f27..140791950
+--- a/pkg/sql/sem/types/oid.go
++++ b/pkg/sql/sem/types/oid.go
+@@ -73,6 +73,8 @@ var OidToType = map[oid.Oid]T{
+ 	oid.T__date:        TArray{Date},
+ 	oid.T_time:         Time,
+ 	oid.T__time:        TArray{Time},
++	oid.T_timetz:       TimeTZ,
++	oid.T__timetz:      TArray{TimeTZ},
+ 	oid.T_float4:       typeFloat4,
+ 	oid.T__float4:      TArray{typeFloat4},
+ 	oid.T_float8:       Float,
+@@ -144,6 +146,7 @@ var aliasedOidToName = map[oid.Oid]string{
+ 	oid.T__bytea:       "_bytea",
+ 	oid.T__date:        "_date",
+ 	oid.T__time:        "_time",
++	oid.T__timetz:      "_timetz",
+ 	oid.T__interval:    "_interval",
+ 	oid.T__name:        "_name",
+ 	oid.T__numeric:     "_numeric",
+@@ -172,6 +175,7 @@ var oidToArrayOid = map[oid.Oid]oid.Oid{
+ 	oid.T_varchar:     oid.T__varchar,
+ 	oid.T_date:        oid.T__date,
+ 	oid.T_time:        oid.T__time,
++	oid.T_timetz:      oid.T__timetz,
+ 	oid.T_timestamp:   oid.T__timestamp,
+ 	oid.T_timestamptz: oid.T__timestamptz,
+ 	oid.T_interval:    oid.T__interval,
+
+index 465b3512e..7df652d89
+--- a/pkg/sql/sem/types/types.go
++++ b/pkg/sql/sem/types/types.go
+@@ -65,6 +65,8 @@ var (
+ 	Date T = tDate{}
+ 	// Time is the type of a DTime. Can be compared with ==.
+ 	Time T = tTime{}
++	//TimeTZ is the type of a DTimeTZ, Can be compared with ==.
++	TimeTZ T = tTimeTZ{}
+ 	// Timestamp is the type of a DTimestamp. Can be compared with ==.
+ 	Timestamp T = tTimestamp{}
+ 	// TimestampTZ is the type of a DTimestampTZ. Can be compared with ==.
+@@ -93,6 +95,7 @@ var (
+ 		Bytes,
+ 		Date,
+ 		Time,
++		TimeTZ,
+ 		Timestamp,
+ 		TimestampTZ,
+ 		Interval,
+@@ -241,6 +244,15 @@ func (tTime) Oid() oid.Oid             { return oid.T_time }
+ func (tTime) SQLName() string          { return "time" }
+ func (tTime) IsAmbiguous() bool        { return false }
+
++type tTimeTZ struct{}
++
++func (tTimeTZ) String() string           { return "timetz" }
++func (tTimeTZ) Equivalent(other T) bool  { return UnwrapType(other) == TimeTZ || other == Any }
++func (tTimeTZ) FamilyEqual(other T) bool { return UnwrapType(other) == TimeTZ }
++func (tTimeTZ) Oid() oid.Oid             { return oid.T_timetz }
++func (tTimeTZ) SQLName() string          { return "time with time zone" }
++func (tTimeTZ) IsAmbiguous() bool        { return false }
++
+ type tTimestamp struct{}
+
+ func (tTimestamp) String() string { return "timestamp" }
+
+index 806bab97e..719731aa9
+--- a/pkg/sql/sqlbase/structured.go
++++ b/pkg/sql/sqlbase/structured.go
+@@ -1508,7 +1508,7 @@ func upperBoundColumnValueEncodedSize(col ColumnDescriptor) (int, bool) {
+ 	switch col.Type.SemanticType {
+ 	case ColumnType_BOOL:
+ 		typ = encoding.True
+-	case ColumnType_INT, ColumnType_DATE, ColumnType_TIME, ColumnType_TIMESTAMP,
++	case ColumnType_INT, ColumnType_DATE, ColumnType_TIME, ColumnType_TIMETZ, ColumnType_TIMESTAMP,
+ 		ColumnType_TIMESTAMPTZ, ColumnType_OID:
+ 		typ, size = encoding.Int, int(col.Type.Width)
+ 	case ColumnType_FLOAT:
+@@ -2253,6 +2253,8 @@ func DatumTypeToColumnSemanticType(ptyp types.T) (ColumnType_SemanticType, error
+ 		return ColumnType_DATE, nil
+ 	case types.Time:
+ 		return ColumnType_TIME, nil
++	case types.TimeTZ:
++		return ColumnType_TIMETZ, nil
+ 	case types.Timestamp:
+ 		return ColumnType_TIMESTAMP, nil
+ 	case types.TimestampTZ:
+@@ -2327,6 +2329,8 @@ func columnSemanticTypeToDatumType(c *ColumnType, k ColumnType_SemanticType) typ
+ 		return types.Date
+ 	case ColumnType_TIME:
+ 		return types.Time
++	case ColumnType_TIMETZ:
++		return types.TimeTZ
+ 	case ColumnType_TIMESTAMP:
+ 		return types.Timestamp
+ 	case ColumnType_TIMESTAMPTZ:
+
+index 65f75e874..24a56065b
+--- a/pkg/sql/sqlbase/structured.proto
++++ b/pkg/sql/sqlbase/structured.proto
+@@ -56,6 +56,7 @@ message ColumnType {
+     INET = 16;
+     TIME = 17;
+     JSON = 18;
++    TIMETZ = 19;
+
+     INT2VECTOR = 200;
+     OIDVECTOR = 201;
+
+index 2bf7536b5..7a489b68a
+--- a/pkg/sql/sqlbase/table.go
++++ b/pkg/sql/sqlbase/table.go
+@@ -118,6 +118,7 @@ func populateTypeAttrs(base ColumnType, typ coltypes.T) (ColumnType, error) {
+ 		}
+ 	case *coltypes.TDate:
+ 	case *coltypes.TTime:
++	case *coltypes.TTimeTZ:
+ 	case *coltypes.TTimestamp:
+ 	case *coltypes.TTimestampTZ:
+ 	case *coltypes.TInterval:
+@@ -560,6 +561,11 @@ func EncodeTableKey(b []byte, val tree.Datum, dir encoding.Direction) ([]byte, e
+ 			return encoding.EncodeVarintAscending(b, int64(*t)), nil
+ 		}
+ 		return encoding.EncodeVarintDescending(b, int64(*t)), nil
++	case *tree.DTimeTZ:
++		if dir == encoding.Ascending {
++			return encoding.EncodeVarintAscending(b, t.ToTime()), nil
++		}
++		return encoding.EncodeVarintDescending(b, t.ToTime()), nil
+ 	case *tree.DTimestamp:
+ 		if dir == encoding.Ascending {
+ 			return encoding.EncodeTimeAscending(b, t.Time), nil
+@@ -645,6 +651,8 @@ func EncodeTableValue(
+ 		return encoding.EncodeIntValue(appendTo, uint32(colID), int64(*t)), nil
+ 	case *tree.DTime:
+ 		return encoding.EncodeIntValue(appendTo, uint32(colID), int64(*t)), nil
++	case *tree.DTimeTZ:
++		return encoding.EncodeTimeValue(appendTo, uint32(colID), t.ToTime()), nil
+ 	case *tree.DTimestamp:
+ 		return encoding.EncodeTimeValue(appendTo, uint32(colID), t.Time), nil
+ 	case *tree.DTimestampTZ:
+@@ -999,6 +1007,7 @@ type DatumAlloc struct {
+ 	ddecimalAlloc     []tree.DDecimal
+ 	ddateAlloc        []tree.DDate
+ 	dtimeAlloc        []tree.DTime
++	dtimeTzAlloc      []tree.DTimeTZ
+ 	dtimestampAlloc   []tree.DTimestamp
+ 	dtimestampTzAlloc []tree.DTimestampTZ
+ 	dintervalAlloc    []tree.DInterval
+@@ -1099,6 +1108,18 @@ func (a *DatumAlloc) NewDTime(v tree.DTime) *tree.DTime {
+ 	return r
+ }
+
++// NewDTimeTZ allocates a DTimeTZ.
++func (a *DatumAlloc) NewDTimeTZ(v tree.DTimeTZ) *tree.DTimeTZ {
++	buf := &a.dtimeTzAlloc
++	if len(*buf) == 0 {
++		*buf = make([]tree.DTimeTZ, datumAllocSize)
++	}
++	r := &(*buf[0])
++	*r = v
++	*buf = (*buf)[1:]
++	return r
++}
++
+ // NewDTimestamp allocates a DTimestamp.
+ func (a *DatumAlloc) NewDTimestamp(v tree.DTimestamp) *tree.DTimestamp {
+ 	buf := &a.dtimestampAlloc
+@@ -1274,6 +1295,14 @@ func DecodeTableKey(
+ 			rkey, t, err = encoding.DecodeVarintDescending(key)
+ 		}
+ 		return a.NewDTime(tree.DTime(t)), rkey, err
++	case types.TimeTZ:
++		var t time.Time
++		if dir == encoding.Ascending {
++			rkey, t, err = encoding.DecodeTimeAscending(key)
++		} else {
++			rkey, t, err = encoding.DecodeTimeDescending(key)
++		}
++		return a.NewDTimeTZ(tree.DTimeTZ{timeofday.FromTime(t), t.Location()}), rkey, err
+ 	case types.Timestamp:
+ 		var t time.Time
+ 		if dir == encoding.Ascending {
+@@ -1497,6 +1526,12 @@ func decodeUntaggedDatum(a *DatumAlloc, t types.T, buf []byte) (tree.Datum, []by
+ 			return nil, b, err
+ 		}
+ 		return a.NewDTime(tree.DTime(data)), b, nil
++	case types.TimeTZ:
++		b, data, err := encoding.DecodeUntaggedTimeValue(buf)
++		if err != nil {
++			return nil, b, err
++		}
++		return a.NewDTimeTZ(tree.DTimeTZ{timeofday.FromTime(data), data.Location()}), b, nil
+ 	case types.Timestamp:
+ 		b, data, err := encoding.DecodeUntaggedTimeValue(buf)
+ 		if err != nil {
+@@ -1823,6 +1858,11 @@ func MarshalColumnValue(col ColumnDescriptor, val tree.Datum) (roachpb.Value, er
+ 			r.SetInt(int64(*v))
+ 			return r, nil
+ 		}
++	case ColumnType_TIMETZ:
++		if v, ok := val.(*tree.DTimeTZ); ok {
++			r.SetTime(v.Time)
++			return r, nil
++		}
+ 	case ColumnType_TIMESTAMP:
+ 		if v, ok := val.(*tree.DTimestamp); ok {
+ 			r.SetTime(v.Time)
+@@ -1971,7 +2011,7 @@ func parserTypeToEncodingType(t types.T) (encoding.Type, error) {
+ 		return encoding.Decimal, nil
+ 	case types.Bytes, types.String, types.Name:
+ 		return encoding.Bytes, nil
+-	case types.Timestamp, types.TimestampTZ:
++	case types.Timestamp, types.TimestampTZ, types,TimeTZ:
+ 		return encoding.Time, nil
+ 	// Note: types.Date was incorrectly mapped to encoding.Time when arrays were
+ 	// first introduced. If any 1.1 users used date arrays, they would have been
+@@ -2016,6 +2056,8 @@ func encodeArrayElement(b []byte, d tree.Datum) ([]byte, error) {
+ 		return encoding.EncodeUntaggedIntValue(b, int64(*t)), nil
+ 	case *tree.DTime:
+ 		return encoding.EncodeUntaggedIntValue(b, int64(*t)), nil
++	case *tree.DTimeTZ:
++		return encoding.EncodeUntaggedTimeValue(b, t.ToTime()), nil
+ 	case *tree.DTimestamp:
+ 		return encoding.EncodeUntaggedTimeValue(b, t.Time), nil
+ 	case *tree.DTimestampTZ:
+@@ -2092,6 +2134,12 @@ func UnmarshalColumnValue(a *DatumAlloc, typ ColumnType, value roachpb.Value) (t
+ 			return nil, err
+ 		}
+ 		return a.NewDTime(tree.DTime(v)), nil
++	case ColumnType_TIMETZ:
++		v, err := value.GetTime()
++		if err != nil {
++			return nil, err
++		}
++		return a.NewDTimeTZ(tree.DTimeTZ{timeofday.FromTime(v), v.Location()}, nil
+ 	case ColumnType_TIMESTAMP:
+ 		v, err := value.GetTime()
+ 		if err != nil {
+
+index 55bd47090..fdb687524
+--- a/pkg/util/timeofday/time_of_day.go
++++ b/pkg/util/timeofday/time_of_day.go
+@@ -109,6 +109,11 @@ func Difference(t1 TimeOfDay, t2 TimeOfDay) duration.Duration {
+ 	return duration.Duration{Nanos: int64(t1-t2) * nanosPerMicro}
+ }
+
++// Sum returns the TimeOfDay that is the sum of t1 and t2.
++func Sum(t1 TimeOfDay, t2 TimeOfDay) TimeOfDay {
++	return TimeOfDay(int64(t1+t2))
++}
++
+ // Hour returns the hour specified by t, in the range [0, 23].
+ func (t TimeOfDay) Hour() int {
+ 	return int(int64(t)%microsecondsPerDay) / microsecondsPerHour

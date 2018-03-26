@@ -298,7 +298,7 @@ func (expr *CastExpr) TypeCheck(ctx *SemaContext, _ types.T) (TypedExpr, error) 
 			// If the type doesn't have any possible parameters (like length,
 			// precision), the CastExpr becomes a no-op and can be elided.
 			switch expr.Type.(type) {
-			case *coltypes.TBool, *coltypes.TDate, *coltypes.TTime, *coltypes.TTimestamp, *coltypes.TTimestampTZ,
+			case *coltypes.TBool, *coltypes.TDate, *coltypes.TTime, *coltypes.TTimeTZ, *coltypes.TTimestamp, *coltypes.TTimestampTZ,
 				*coltypes.TInterval, *coltypes.TBytes:
 				return expr.Expr.TypeCheck(ctx, returnType)
 			}
@@ -923,6 +923,10 @@ func (d *DDate) TypeCheck(_ *SemaContext, _ types.T) (TypedExpr, error) { return
 // TypeCheck implements the Expr interface. It is implemented as an idempotent
 // identity function for Datum.
 func (d *DTime) TypeCheck(_ *SemaContext, _ types.T) (TypedExpr, error) { return d, nil }
+
+// TypeCheck implements the Expr interface. It is implemented as an idempotent
+// identity function for Datum.
+func (d *DTimeTZ) TypeCheck(_ *SemaContext, _ types.T) (TypedExpr, error) { return d, nil }
 
 // TypeCheck implements the Expr interface. It is implemented as an idempotent
 // identity function for Datum.

@@ -129,13 +129,13 @@ func (p *LogicalProps) OuterCols() opt.ColSet {
 // FormatColSet outputs the specified set of columns using FormatCol to format
 // the output.
 func (p *LogicalProps) FormatColSet(
-	tp treeprinter.Node, md *opt.Metadata, heading string, colSet opt.ColSet,
+	heading string, colSet opt.ColSet, md *opt.Metadata, tp treeprinter.Node,
 ) {
 	if !colSet.Empty() {
 		var buf bytes.Buffer
 		buf.WriteString(heading)
 		colSet.ForEach(func(i int) {
-			p.FormatCol(&buf, md, "", opt.ColumnID(i))
+			p.FormatCol("", opt.ColumnID(i), md, &buf)
 		})
 		tp.Child(buf.String())
 	}
@@ -144,13 +144,13 @@ func (p *LogicalProps) FormatColSet(
 // FormatColList outputs the specified list of columns using FormatCol to
 // format the output.
 func (p *LogicalProps) FormatColList(
-	tp treeprinter.Node, md *opt.Metadata, heading string, colList opt.ColList,
+	heading string, colList opt.ColList, md *opt.Metadata, tp treeprinter.Node,
 ) {
 	if len(colList) > 0 {
 		var buf bytes.Buffer
 		buf.WriteString(heading)
 		for _, col := range colList {
-			p.FormatCol(&buf, md, "", col)
+			p.FormatCol("", col, md, &buf)
 		}
 		tp.Child(buf.String())
 	}
@@ -165,7 +165,7 @@ func (p *LogicalProps) FormatColList(
 // If a label is given, then it is used. Otherwise, a "best effort" label is
 // used from query metadata.
 func (p *LogicalProps) FormatCol(
-	buf *bytes.Buffer, md *opt.Metadata, label string, id opt.ColumnID,
+	label string, id opt.ColumnID, md *opt.Metadata, buf *bytes.Buffer,
 ) {
 	if label == "" {
 		label = md.ColumnLabel(id)

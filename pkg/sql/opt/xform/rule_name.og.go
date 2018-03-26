@@ -2,8 +2,10 @@
 
 package xform
 
+type RuleName uint32
+
 const (
-	startAutoRule RuleName = iota + NumManualRuleNames
+	Invalid RuleName = iota
 
 	// ------------------------------------------------------------
 	// Normalize Rule Names

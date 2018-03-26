@@ -110,8 +110,10 @@ func (e *OptTester) OptSteps(fmtFlags memo.ExprFmtFlags) (string, error) {
 		}
 
 		next = o.Optimize(root, required).FormatString(fmtFlags)
-		if o.MaxSteps != 0 {
-			// All steps were not used, so must be done.
+		if prev == next {
+			// No change, so nothing more to optimize.
+			// TODO(andyk): this method of detecting changes won't work
+			// when we introduce exploration patterns.
 			break
 		}
 
@@ -119,21 +121,16 @@ func (e *OptTester) OptSteps(fmtFlags memo.ExprFmtFlags) (string, error) {
 			// Output starting tree.
 			buf.WriteString(next)
 		} else {
-			// Diffs can be equal if a part of the tree changed that does not
-			// affect the final best expression. In that case, just don't show
-			// anything.
-			if prev != next {
-				diff := difflib.UnifiedDiff{
-					A:        difflib.SplitLines(prev),
-					B:        difflib.SplitLines(next),
-					FromFile: "",
-					ToFile:   o.LastRuleName().String(),
-					Context:  100,
-				}
-
-				text, _ := difflib.GetUnifiedDiffString(diff)
-				buf.WriteString(strings.Trim(text, " \t\r\n") + "\n")
+			diff := difflib.UnifiedDiff{
+				A:        difflib.SplitLines(prev),
+				B:        difflib.SplitLines(next),
+				FromFile: "",
+				ToFile:   o.LastRuleName().String(),
+				Context:  100,
 			}
+
+			text, _ := difflib.GetUnifiedDiffString(diff)
+			buf.WriteString(strings.Trim(text, " \t\r\n") + "\n")
 		}
 
 		prev = next

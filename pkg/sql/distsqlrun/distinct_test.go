@@ -171,7 +171,7 @@ func TestDistinct(t *testing.T) {
 	}
 }
 
-func benchmarkDistinct(b *testing.B, useOrdering bool) {
+func BenchmarkDistinct(b *testing.B) {
 	const numCols = 1
 	const numRows = 1000
 
@@ -188,9 +188,6 @@ func benchmarkDistinct(b *testing.B, useOrdering bool) {
 	spec := &DistinctSpec{
 		DistinctColumns: []uint32{0},
 	}
-	if useOrdering {
-		spec.OrderedColumns = []uint32{0}
-	}
 	post := &PostProcessSpec{}
 	input := NewRepeatableRowSource(oneIntCol, makeIntRows(numRows, numCols))
 
@@ -205,12 +202,4 @@ func benchmarkDistinct(b *testing.B, useOrdering bool) {
 		input.Reset()
 	}
 	b.StopTimer()
-}
-
-func BenchmarkOrderedDistinct(b *testing.B) {
-	benchmarkDistinct(b, true /* useOrdering */)
-}
-
-func BenchmarkUnorderedDistinct(b *testing.B) {
-	benchmarkDistinct(b, false /* useOrdering */)
 }

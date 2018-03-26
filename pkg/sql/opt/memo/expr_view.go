@@ -240,7 +240,8 @@ func (ev ExprView) formatRelational(tp treeprinter.Node, flags ExprFmtFlags) {
 
 	switch ev.Operator() {
 	case opt.ScanOp:
-		ev.mem.formatPrivate(&buf, ev.Private())
+		tabID := ev.Private().(*ScanOpDef).Table
+		fmt.Fprintf(&buf, " %s", ev.Metadata().Table(tabID).TabName())
 	}
 
 	logProps := ev.Logical()
@@ -252,7 +253,7 @@ func (ev ExprView) formatRelational(tp treeprinter.Node, flags ExprFmtFlags) {
 	// If a particular column presentation is required of the expression, then
 	// print columns using that information.
 	if physProps.Presentation.Defined() {
-		ev.formatPresentation(tp, physProps.Presentation)
+		ev.formatPresentation(physProps.Presentation, tp)
 	} else {
 		// Special handling to improve the columns display for certain ops.
 		switch ev.Operator() {
@@ -260,21 +261,21 @@ func (ev ExprView) formatRelational(tp treeprinter.Node, flags ExprFmtFlags) {
 			// Get the list of columns from the ProjectionsOp, which has the
 			// natural order.
 			colList := *ev.Child(1).Private().(*opt.ColList)
-			logProps.FormatColList(tp, ev.Metadata(), "columns:", colList)
+			logProps.FormatColList("columns:", colList, ev.Metadata(), tp)
 
 		case opt.ValuesOp:
 			colList := *ev.Private().(*opt.ColList)
-			logProps.FormatColList(tp, ev.Metadata(), "columns:", colList)
+			logProps.FormatColList("columns:", colList, ev.Metadata(), tp)
 
 		case opt.UnionOp, opt.IntersectOp, opt.ExceptOp,
 			opt.UnionAllOp, opt.IntersectAllOp, opt.ExceptAllOp:
 			colMap := ev.Private().(*SetOpColMap)
-			logProps.FormatColList(tp, ev.Metadata(), "columns:", colMap.Out)
+			logProps.FormatColList("columns:", colMap.Out, ev.Metadata(), tp)
 
 		default:
 			// Fall back to writing output columns in column id order, with
 			// best guess label.
-			logProps.FormatColSet(tp, ev.Metadata(), "columns:", logProps.Relational.OutputCols)
+			logProps.FormatColSet("columns:", logProps.Relational.OutputCols, ev.Metadata(), tp)
 		}
 	}
 
@@ -283,15 +284,15 @@ func (ev ExprView) formatRelational(tp treeprinter.Node, flags ExprFmtFlags) {
 	// addition to full set of columns.
 	case opt.GroupByOp:
 		groupingColSet := *ev.Private().(*opt.ColSet)
-		logProps.FormatColSet(tp, ev.Metadata(), "grouping columns:", groupingColSet)
+		logProps.FormatColSet("grouping columns:", groupingColSet, ev.Metadata(), tp)
 
 		// Special-case handling for set operators to show the left and right
 		// input columns that correspond to the output columns.
 	case opt.UnionOp, opt.IntersectOp, opt.ExceptOp,
 		opt.UnionAllOp, opt.IntersectAllOp, opt.ExceptAllOp:
 		colMap := ev.Private().(*SetOpColMap)
-		logProps.FormatColList(tp, ev.Metadata(), "left columns:", colMap.Left)
-		logProps.FormatColList(tp, ev.Metadata(), "right columns:", colMap.Right)
+		logProps.FormatColList("left columns:", colMap.Left, ev.Metadata(), tp)
+		logProps.FormatColList("right columns:", colMap.Right, ev.Metadata(), tp)
 	}
 
 	if !flags.HasFlags(ExprFmtHideStats) {
@@ -315,7 +316,7 @@ func (ev ExprView) formatScalar(tp treeprinter.Node, flags ExprFmtFlags) {
 	var buf bytes.Buffer
 
 	fmt.Fprintf(&buf, "%v", ev.op)
-	ev.formatScalarPrivate(&buf, ev.Private())
+	ev.formatPrivate(&buf, ev.Private())
 
 	// Don't panic if scalar properties don't yet exist when printing
 	// expression.
@@ -356,8 +357,12 @@ func (ev ExprView) formatScalar(tp treeprinter.Node, flags ExprFmtFlags) {
 	}
 }
 
-func (ev ExprView) formatScalarPrivate(buf *bytes.Buffer, private interface{}) {
+func (ev ExprView) formatPrivate(buf *bytes.Buffer, private interface{}) {
 	switch ev.op {
+	case opt.VariableOp:
+		id := private.(opt.ColumnID)
+		private = ev.mem.metadata.ColumnLabel(id)
+
 	case opt.NullOp:
 		// Private is redundant with logical type property.
 		private = nil
@@ -370,18 +375,17 @@ func (ev ExprView) formatScalarPrivate(buf *bytes.Buffer, private interface{}) {
 	}
 
 	if private != nil {
-		buf.WriteRune(':')
-		ev.mem.formatPrivate(buf, private)
+		fmt.Fprintf(buf, ": %v", private)
 	}
 }
 
-func (ev ExprView) formatPresentation(tp treeprinter.Node, presentation Presentation) {
+func (ev ExprView) formatPresentation(presentation Presentation, tp treeprinter.Node) {
 	logProps := ev.Logical()
 
 	var buf bytes.Buffer
 	buf.WriteString("columns:")
 	for _, col := range presentation {
-		logProps.FormatCol(&buf, ev.Metadata(), col.Label, col.ID)
+		logProps.FormatCol(col.Label, col.ID, ev.Metadata(), &buf)
 	}
 	tp.Child(buf.String())
 }

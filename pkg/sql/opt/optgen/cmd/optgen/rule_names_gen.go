@@ -35,8 +35,10 @@ func (g *ruleNamesGen) generate(compiled *lang.CompiledExpr, w io.Writer) {
 
 	fmt.Fprintf(g.w, "package xform\n\n")
 
+	fmt.Fprintf(g.w, "type RuleName uint32\n\n")
+
 	fmt.Fprintf(g.w, "const (\n")
-	fmt.Fprintf(g.w, "  startAutoRule RuleName = iota + NumManualRuleNames\n\n")
+	fmt.Fprintf(g.w, "  Invalid RuleName = iota\n\n")
 
 	g.genRuleNameEnumByTag("Normalize")
 
