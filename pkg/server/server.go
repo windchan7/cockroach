@@ -1599,6 +1599,52 @@ If problems persist, please see ` + base.DocsURL("cluster-setup-troubleshooting.
 	return nil
 }
 
+func (s *Server) AutoUpgrade(ctx context.Context) {
+	sqlExecutor := &sql.InternalExecutor{ExecCfg: s.execCfg}
+	preserveDowngradeVersionStmt := "SHOW cluster setting cluster.test;"
+	orgStmt := "show cluster setting cluster.organization;"
+	systemStmt := "select * from system.settings;"
+
+	datums, _, err := sqlExecutor.QueryRows(ctx, "downgrade-version", preserveDowngradeVersionStmt)
+	if err != nil {
+		log.Warningf(ctx, "getting downgrade failed, err: ", err)
+		return
+	}
+	if len(datums) == 0 {
+		log.Warningf(ctx, "getting downgrade failed, no datum")
+		return
+	}
+
+	downgradeVersion := string(tree.MustBeDString(datums[0][0]))
+
+	datums, _, err = sqlExecutor.QueryRows(ctx, "downgrade-version", orgStmt)
+	if err != nil {
+		log.Warningf(ctx, "getting org failed, err: ", err)
+		return
+	}
+	if len(datums) == 0 {
+		log.Warningf(ctx, "getting org failed, no datum")
+		return
+	}
+
+	org := string(tree.MustBeDString(datums[0][0]))
+
+	datums, _, err = sqlExecutor.QueryRows(ctx, "downgrade-version", systemStmt)
+	if err != nil {
+		log.Warningf(ctx, "getting system failed, err: ", err)
+		return
+	}
+	if len(datums) == 0 {
+		log.Warningf(ctx, "getting system failed, no datum")
+		return
+	}
+
+
+
+	log.Infof(ctx, "test cluster info: %s, %s", s.execCfg.ClusterTest(), s.execCfg.Organization())
+	log.Infof(ctx, "test cluster info: %s, %s, %s", downgradeVersion, org, datums)
+}
+
 func (s *Server) doDrain(
 	ctx context.Context, modes []serverpb.DrainMode, setTo bool,
 ) ([]serverpb.DrainMode, error) {

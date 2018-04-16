@@ -65,6 +65,17 @@ var ClusterOrganization = settings.RegisterStringSetting(
 	"",
 )
 
+var ClusterTest = settings.RegisterStringSetting(
+	"cluster.test",
+	"organization name",
+	"666",
+)
+
+// Organization returns the value of cluster.organization.
+func (ec *ExecutorConfig) ClusterTest() string {
+	return ClusterTest.Get(&ec.Settings.SV)
+}
+
 // ClusterSecret is a cluster specific secret. This setting is hidden.
 var ClusterSecret = func() *settings.StringSetting {
 	s := settings.RegisterStringSetting(

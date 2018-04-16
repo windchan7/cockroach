@@ -599,6 +599,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 			if !log.LoggingToStderr(log.Severity_INFO) {
 				fmt.Print(msg)
 			}
+			s.AutoUpgrade(ctx)
 			return nil
 		}(); err != nil {
 			errChan <- err
