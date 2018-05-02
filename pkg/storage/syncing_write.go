@@ -23,6 +23,7 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
+	"github.com/cockroachdb/cockroach/pkg/storage/engine"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"golang.org/x/time/rate"
@@ -75,6 +76,7 @@ func writeFileSyncing(
 	ctx context.Context,
 	filename string,
 	data []byte,
+	eng engine.Engine,
 	perm os.FileMode,
 	settings *cluster.Settings,
 	limiter *rate.Limiter,
@@ -84,6 +86,56 @@ func writeFileSyncing(
 	if chunkSize == 0 {
 		chunkSize = bulkIOWriteBurst
 		sync = false
+	}
+
+	f, err := eng.OpenFile(filename)
+	if err != nil {
+		return err
+	}
+
+	for i := int64(0); i < int64(len(data)); i += chunkSize {
+		end := i + chunkSize
+		if l := int64(len(data)); end > l {
+			end = l
+		}
+		chunk := data[i:end]
+
+		// rate limit
+		limitBulkIOWrite(ctx, limiter, len(chunk))
+		err = f.Append(chunk)
+		if err == nil && sync {
+			err = f.Sync()
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	closeErr := f.Close()
+	if err == nil {
+		err = closeErr
+	}
+
+	if _, inMem := eng.(engine.InMem); inMem {
+		err = inMemWriteFileSyncing(ctx, filename, eng, perm, limiter, chunkSize, sync, len(data))
+	}
+	return err
+
+}
+
+func inMemWriteFileSyncing(
+	ctx context.Context,
+	filename string,
+	eng engine.Engine,
+	perm os.FileMode,
+	limiter *rate.Limiter,
+	chunkSize int64,
+	sync bool,
+	size int,
+) error {
+	data, err := eng.ReadFile(filename, size)
+	if err != nil {
+		return err
 	}
 
 	f, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)

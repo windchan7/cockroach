@@ -223,4 +223,102 @@ DBStatus DBImpl::EnvWriteFile(DBSlice path, DBSlice contents) {
   return kSuccess;
 }
 
+// EnvOpenFile opens a new file in the given engine.
+DBStatus DBImpl::EnvOpenFile(DBSlice path, rocksdb::WritableFile** file) {
+  rocksdb::Status s;
+  const rocksdb::EnvOptions soptions;
+  rocksdb::unique_ptr<rocksdb::WritableFile> rocksdb_file;
+
+  // Recursively create the directory of the given file.
+  std::string delimiter = "/";
+  std::string dir = "";
+  std::string rest = ToString(path);
+  int i = 0;
+  int next;
+  while(rest.length() != 0 && (next = rest.find(delimiter)) != -1) {
+    std::string current = rest.substr(0, next+1);
+    i += current.length();
+    rest = rest.substr(current.length(), rest.length());
+    dir += current;
+    this->rep->GetEnv()->CreateDirIfMissing(dir);
+  }
+
+  // Create the file.
+  s = this->rep->GetEnv()->NewWritableFile(ToString(path), &rocksdb_file, soptions);
+  if (!s.ok()) {
+    return ToDBStatus(s);
+  }
+  *file = rocksdb_file.release();
+  return kSuccess;
+}
+
+// CloseFile closes the given file in the given engine.
+DBStatus DBImpl::EnvCloseFile(rocksdb::WritableFile** file) {
+  rocksdb::Status s = (*file)->Close();
+  if (!s.ok()) {
+    return ToDBStatus(s);
+  }
+  delete *file;
+  return kSuccess;
+}
+
+// EnvAppendFile appends the given data to the file in the given engine.
+DBStatus DBImpl::EnvAppendFile(rocksdb::WritableFile** file, DBSlice contents) {
+  rocksdb::Status s;
+  s = (*file)->Append(ToSlice(contents));
+  if (!s.ok()) {
+    return ToDBStatus(s);
+  }
+  return kSuccess;
+}
+
+// EnvSyncFile synchronously writes the data of the file to the disk.
+DBStatus DBImpl::EnvSyncFile(rocksdb::WritableFile** file) {
+  rocksdb::Status s = (*file)->Sync();
+  if (!s.ok()) {
+    return ToDBStatus(s);
+  }
+  return kSuccess;
+}
+
+DBStatus DBImpl::EnvReadFile(DBSlice path, DBSlice* contents, uint64_t size) {
+  rocksdb::Status s;
+  const rocksdb::EnvOptions soptions;
+  rocksdb::unique_ptr<rocksdb::RandomRWFile> rocksdb_file;
+
+  s = this->rep->GetEnv()->NewRandomRWFile(ToString(path), &rocksdb_file, soptions);
+  if (!s.ok()) {
+    return ToDBStatus(s);
+  }
+
+  char* scratch = static_cast<char*>(malloc(size));
+  contents->data = static_cast<char*>(malloc(size));
+  rocksdb::Slice slice = ToSlice(*contents);
+  s = rocksdb_file->Read(0, size, &slice, scratch);
+  if (!s.ok()) {
+    return ToDBStatus(s);
+  }
+
+  const char* data = slice.data();
+  memcpy(contents->data, data, slice.size());
+  contents->len = slice.size();
+  return kSuccess;
+}
+
+DBStatus DBImpl::EnvDeleteFile(DBSlice path) {
+  rocksdb::Status s = this->rep->GetEnv()->DeleteFile(ToString(path));
+  if (!s.ok()) {
+    return ToDBStatus(s);
+  }
+  return kSuccess;
+}
+
+DBStatus DBImpl::EnvDeleteDir(DBSlice path) {
+  rocksdb::Status s = this->rep->GetEnv()->DeleteDir(ToString(path));
+  if (!s.ok()) {
+    return ToDBStatus(s);
+  }
+  return kSuccess;
+}
+
 }  // namespace cockroach

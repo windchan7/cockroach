@@ -38,6 +38,13 @@ struct DBSnapshot : public DBEngine {
   virtual DBStatus GetStats(DBStatsResult* stats);
   virtual DBString GetCompactionStats();
   virtual DBStatus EnvWriteFile(DBSlice path, DBSlice contents);
+  virtual DBStatus EnvOpenFile(DBSlice path, rocksdb::WritableFile** file);
+  virtual DBStatus EnvAppendFile(rocksdb::WritableFile** file, DBSlice contents);
+  virtual DBStatus EnvSyncFile(rocksdb::WritableFile** file);
+  virtual DBStatus EnvReadFile(DBSlice path, DBSlice* contents, uint64_t size);
+  virtual DBStatus EnvCloseFile(rocksdb::WritableFile** file);
+  virtual DBStatus EnvDeleteFile(DBSlice path);
+  virtual DBStatus EnvDeleteDir(DBSlice path);
 };
 
 }  // namespace cockroach
