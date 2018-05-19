@@ -526,10 +526,10 @@ func TestParseDTimeTZ(t *testing.T) {
 		str      string
 		expected *tree.DTimeTZ
 	}{
-		{"04:05:06+00", tree.MakeDTimeTZ(timeofday.New(4, 5, 6, 0), time.UTC)},
-		{"04:05:06.000001-05", tree.MakeDTimeTZ(timeofday.New(4, 5, 6, 1), l1)},
-		{"04:05:06+08", tree.MakeDTimeTZ(timeofday.New(4, 5, 6, 0), l2)},
-		{"4:5:6+01", tree.MakeDTimeTZ(timeofday.New(4, 5, 6, 0), l3)},
+		{"04:05:06+00", tree.MakeDTimeTZ(int64(timeofday.New(4, 5, 6, 0)) * 1000, time.UTC)},
+		{"04:05:06.000001-05", tree.MakeDTimeTZ(int64(timeofday.New(4, 5, 6, 1)) * 1000, l1)},
+		{"04:05:06+08", tree.MakeDTimeTZ(int64(timeofday.New(4, 5, 6, 0)) * 1000, l2)},
+		{"4:5:6+01", tree.MakeDTimeTZ(int64(timeofday.New(4, 5, 6, 0)) * 1000, l3)},
 	}
 	for _, td := range testData {
 		actual, err := tree.ParseDTimeTZ(td.str, time.UTC)

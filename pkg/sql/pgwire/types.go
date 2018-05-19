@@ -362,7 +362,7 @@ func (b *writeBuffer) writeBinaryDatum(
 
 	case *tree.DTimeTZ:
 		b.putInt32(8)
-		b.putInt64(int64(timeofday.FromTime(v.ToTime().UTC())))
+		b.putInt64(v.ToTime().UnixNano())
 
 	case *tree.DInterval:
 		b.putInt32(16)
@@ -407,7 +407,7 @@ func (b *writeBuffer) writeBinaryDatum(
 }
 
 const pgTimeFormat = "15:04:05.999999"
-const pgTimeTSFormat = pgTimeFormat + "-07:00"
+const pgTimeTZFormat = pgTimeFormat + "-07:00"
 const pgTimeStampFormatNoOffset = "2006-01-02 " + pgTimeFormat
 const pgTimeStampFormat = pgTimeStampFormatNoOffset + "-07:00"
 
@@ -426,7 +426,7 @@ func formatTimeTZ(ttz *tree.DTimeTZ, offset *time.Location, tmp []byte) []byte {
 	if offset != nil {
 		t = t.In(offset)
 	}
-	return t.AppendFormat(tmp, pgTimeTSFormat)
+	return t.AppendFormat(tmp, pgTimeTZFormat)
 }
 
 // formatTs formats t with an optional offset into a format lib/pq understands,

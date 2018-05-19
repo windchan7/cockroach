@@ -245,7 +245,7 @@ func TestCopyRandom(t *testing.T) {
 				if types[i] == sqlbase.ColumnType_TIME {
 					dt = tree.MakeDTime(timeofday.FromTime(d))
 				} else if types[i] == sqlbase.ColumnType_TIMETZ {
-					dt = tree.MakeDTimeTZ(timeofday.FromTime(d), d.Location())
+					dt = tree.MakeDTimeTZ(d.UnixNano(), d.Location())
 				} else {
 					dt = tree.MakeDTimestamp(d, time.Microsecond)
 				}

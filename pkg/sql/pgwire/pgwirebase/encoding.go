@@ -489,7 +489,7 @@ func DecodeOidDatum(id oid.Oid, code FormatCode, b []byte) (tree.Datum, error) {
 				return nil, errors.Errorf("timetz requires 8 bytes for binary format")
 			}
 			i := int64(binary.BigEndian.Uint64(b))
-			return tree.MakeDTimeTZ(timeofday.TimeOfDay(i), time.UTC), nil
+			return tree.MakeDTimeTZ(i, time.UTC), nil
 		case oid.T_interval:
 			if len(b) < 16 {
 				return nil, errors.Errorf("interval requires 16 bytes for binary format")

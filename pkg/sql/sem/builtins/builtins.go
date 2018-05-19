@@ -1427,7 +1427,7 @@ may increase either contention or retry errors, or both.`,
 			Category:   categoryDateAndTime,
 			Fn: func(ctx *tree.EvalContext, args tree.Datums) (tree.Datum, error) {
 				fromTimeTZ := args[1].(*tree.DTimeTZ)
-				fromTime := tree.MakeDTime(fromTimeTZ.TimeOfDay)
+				fromTime := tree.MakeDTime(timeofday.FromInt(fromTimeTZ.ToTime().UnixNano() / 1000))
 				timeSpan := strings.ToLower(string(tree.MustBeDString(args[0])))
 				return extractStringFromTime(fromTime, timeSpan)
 			},

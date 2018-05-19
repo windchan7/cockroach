@@ -1630,15 +1630,20 @@ func (d *DTime) Size() uintptr {
 	return unsafe.Sizeof(*d)
 }
 
+const nanosPerMicro = 1000
 // DTimeTZ is the time with time zone Datum.
 type DTimeTZ struct {
-	timeofday.TimeOfDay
+	Nanos int64
 	*time.Location
 }
 
 // ToTime converts a DTimeTZ to a time.Time, using the Unix epoch as the date.
 func (d *DTimeTZ) ToTime() time.Time {
-	t := d.TimeOfDay.ToTime().In(d.Location)
+	return timeutil.Unix(0, d.Nanos)
+}
+
+func (d *DTimeTZ) timeOnly() time.Time {
+	t := timeofday.FromInt(d.Nanos / nanosPerMicro).ToTime().In(d.Location)
 	tSeconds := t.Unix() * int64(time.Second)
 	_, tOffset := t.Zone()
 	tNanos := int64(t.Nanosecond())
@@ -1647,8 +1652,8 @@ func (d *DTimeTZ) ToTime() time.Time {
 }
 
 // MakeDTimeTZ creates a DTimeTZ from a TimeOfDay and time.Location.
-func MakeDTimeTZ(t timeofday.TimeOfDay, loc *time.Location) *DTimeTZ {
-	d := DTimeTZ{t, loc}
+func MakeDTimeTZ(t int64, loc *time.Location) *DTimeTZ {
+	d := DTimeTZ{Nanos: t, Location: loc}
 	return &d
 }
 
@@ -1660,7 +1665,7 @@ func ParseDTimeTZ(s string, loc *time.Location) (*DTimeTZ, error) {
 		// Build our own error message to avoid exposing the dummy date.
 		return nil, makeParseError(s, types.TimeTZ, nil)
 	}
-	return MakeDTimeTZ(timeofday.FromTime(t), t.Location()), nil
+	return MakeDTimeTZ(t.UnixNano(), t.Location()), nil
 }
 
 // ResolvedType implements the TypedExpr interface.
@@ -1679,13 +1684,13 @@ func (d *DTimeTZ) Compare(ctx *EvalContext, other Datum) int {
 
 // Prev implements the Datum interface.
 func (d *DTimeTZ) Prev(_ *EvalContext) (Datum, bool) {
-	prev := DTimeTZ{d.TimeOfDay - 1, d.Location}
+	prev := DTimeTZ{Nanos: d.Nanos - nanosPerMicro, Location: d.Location}
 	return &prev, true
 }
 
 // Next implements the Datum interface.
 func (d *DTimeTZ) Next(_ *EvalContext) (Datum, bool) {
-	next := DTimeTZ{d.TimeOfDay + 1, d.Location}
+	next := DTimeTZ{Nanos: d.Nanos + nanosPerMicro, Location: d.Location}
 	return &next, true
 }
 
@@ -1723,15 +1728,7 @@ func (d *DTimeTZ) Format(ctx *FmtCtx) {
 	if !bareStrings {
 		ctx.WriteByte('\'')
 	}
-
-	ds := d.ToTime().String()
-	// Get the time zone information, eg. -05:00
-	tz := strings.Split(ds, " ")[2]
-	tz = tz[0:3] + ":" + tz[3:]
-	tod := d.TimeOfDay.String()
-	ds = tod + tz
-
-	ctx.WriteString(ds)
+	ctx.WriteString(d.ToTime().Format(TimeOutputFormat))
 	if !bareStrings {
 		ctx.WriteByte('\'')
 	}
@@ -1775,6 +1772,7 @@ const (
 
 	// TimestampOutputFormat is used to output all timestamps.
 	TimestampOutputFormat = "2006-01-02 15:04:05.999999-07:00"
+	TimeOutputFormat = "15:04:05.999999-07:00"
 )
 
 var timeFormats = []string{
@@ -1892,7 +1890,7 @@ func timeFromDatum(ctx *EvalContext, d Datum) (time.Time, bool) {
 	case *DTimestamp:
 		return t.Time, true
 	case *DTimeTZ:
-		return t.ToTime(), true
+		return t.timeOnly(), true
 	case *DTime:
 		return timeofday.TimeOfDay(*t).ToTime(), true
 	default:

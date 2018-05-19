@@ -36,7 +36,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/encoding"
 	"github.com/cockroachdb/cockroach/pkg/util/ipaddr"
 	"github.com/cockroachdb/cockroach/pkg/util/json"
-	"github.com/cockroachdb/cockroach/pkg/util/timeofday"
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 )
 
@@ -614,9 +613,9 @@ func EncodeTableKey(b []byte, val tree.Datum, dir encoding.Direction) ([]byte, e
 		return encoding.EncodeVarintDescending(b, int64(*t)), nil
 	case *tree.DTimeTZ:
 		if dir == encoding.Ascending {
-			return encoding.EncodeVarintAscending(b, int64(timeofday.FromTime(t.ToTime().UTC()))), nil
+			return encoding.EncodeVarintAscending(b, int64(t.ToTime().UnixNano())), nil
 		}
-		return encoding.EncodeVarintDescending(b, int64(timeofday.FromTime(t.ToTime().UTC()))), nil
+		return encoding.EncodeVarintDescending(b, int64(t.ToTime().UnixNano())), nil
 	case *tree.DTimestamp:
 		if dir == encoding.Ascending {
 			return encoding.EncodeTimeAscending(b, t.Time), nil
@@ -703,7 +702,7 @@ func EncodeTableValue(
 	case *tree.DTime:
 		return encoding.EncodeIntValue(appendTo, uint32(colID), int64(*t)), nil
 	case *tree.DTimeTZ:
-		return encoding.EncodeIntValue(appendTo, uint32(colID), int64(timeofday.FromTime(t.ToTime().UTC()))), nil
+		return encoding.EncodeIntValue(appendTo, uint32(colID), int64(t.ToTime().UnixNano())), nil
 	case *tree.DTimestamp:
 		return encoding.EncodeTimeValue(appendTo, uint32(colID), t.Time), nil
 	case *tree.DTimestampTZ:
@@ -1353,7 +1352,7 @@ func DecodeTableKey(
 		} else {
 			rkey, t, err = encoding.DecodeVarintDescending(key)
 		}
-		return a.NewDTimeTZ(tree.DTimeTZ{TimeOfDay: timeofday.FromInt(t), Location: time.UTC}), rkey, err
+		return a.NewDTimeTZ(tree.DTimeTZ{Nanos: t, Location: time.UTC}), rkey, err
 	case types.Timestamp:
 		var t time.Time
 		if dir == encoding.Ascending {
@@ -1582,7 +1581,7 @@ func decodeUntaggedDatum(a *DatumAlloc, t types.T, buf []byte) (tree.Datum, []by
 		if err != nil {
 			return nil, b, err
 		}
-		return a.NewDTimeTZ(tree.DTimeTZ{TimeOfDay: timeofday.FromInt(data), Location: time.UTC}), b, nil
+		return a.NewDTimeTZ(tree.DTimeTZ{Nanos: data, Location: time.UTC}), b, nil
 	case types.Timestamp:
 		b, data, err := encoding.DecodeUntaggedTimeValue(buf)
 		if err != nil {
@@ -1911,7 +1910,7 @@ func MarshalColumnValue(col ColumnDescriptor, val tree.Datum) (roachpb.Value, er
 		}
 	case ColumnType_TIMETZ:
 		if v, ok := val.(*tree.DTimeTZ); ok {
-			r.SetInt(int64(timeofday.FromTime(v.ToTime().UTC())))
+			r.SetInt(v.Nanos)
 			return r, nil
 		}
 	case ColumnType_TIMESTAMP:
@@ -2110,7 +2109,7 @@ func encodeArrayElement(b []byte, d tree.Datum) ([]byte, error) {
 	case *tree.DTime:
 		return encoding.EncodeUntaggedIntValue(b, int64(*t)), nil
 	case *tree.DTimeTZ:
-		return encoding.EncodeUntaggedIntValue(b, int64(timeofday.FromTime(t.ToTime().UTC()))), nil
+		return encoding.EncodeUntaggedIntValue(b, t.Nanos), nil
 	case *tree.DTimestamp:
 		return encoding.EncodeUntaggedTimeValue(b, t.Time), nil
 	case *tree.DTimestampTZ:
@@ -2192,7 +2191,7 @@ func UnmarshalColumnValue(a *DatumAlloc, typ ColumnType, value roachpb.Value) (t
 		if err != nil {
 			return nil, err
 		}
-		return a.NewDTimeTZ(tree.DTimeTZ{TimeOfDay: timeofday.FromInt(v), Location: time.UTC}), nil
+		return a.NewDTimeTZ(tree.DTimeTZ{Nanos: v, Location: time.UTC}), nil
 	case ColumnType_TIMESTAMP:
 		v, err := value.GetTime()
 		if err != nil {

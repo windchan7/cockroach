@@ -445,7 +445,7 @@ func TestMarshalColumnValue(t *testing.T) {
 		},
 		{
 			kind:  ColumnType_TIMETZ,
-			datum: tree.MakeDTimeTZ(timeofday.FromInt(314159), time.UTC),
+			datum: tree.MakeDTimeTZ(314159, time.UTC),
 			exp:   func() (v roachpb.Value) { v.SetInt(314159); return }(),
 		},
 		{
