@@ -107,32 +107,36 @@ type tpccBenchSpec struct {
 }
 
 func registerTPCCBenchSpec(r *registry, b tpccBenchSpec) {
-	nameParts := []string{
-		"tpccbench",
-		fmt.Sprintf("nodes=%d", b.Nodes),
-		fmt.Sprintf("cpu=%d", b.CPUs),
-	}
-	if b.Chaos {
-		nameParts = append(nameParts, "chaos")
-	}
-	if b.Geo {
-		nameParts = append(nameParts, "geo")
-	}
-	name := strings.Join(nameParts, "/")
+	for _, e := range []bool{false, true} {
+		e := e
+		nameParts := []string{
+			"tpccbench",
+			fmt.Sprintf("nodes=%d", b.Nodes),
+			fmt.Sprintf("cpu=%d", b.CPUs),
+			fmt.Sprintf("encrypt=%t", e),
+		}
+		if b.Chaos {
+			nameParts = append(nameParts, "chaos")
+		}
+		if b.Geo {
+			nameParts = append(nameParts, "geo")
+		}
+		name := strings.Join(nameParts, "/")
 
-	opts := []createOption{cpu(b.CPUs)}
-	if b.Geo {
-		opts = append(opts, geo())
-	}
-	nodes := nodes(b.Nodes+1, opts...)
+		opts := []createOption{cpu(b.CPUs)}
+		if b.Geo {
+			opts = append(opts, geo())
+		}
+		nodes := nodes(b.Nodes+1, opts...)
 
-	r.Add(testSpec{
-		Name:  name,
-		Nodes: nodes,
-		Run: func(ctx context.Context, t *test, c *cluster) {
-			runTPCCBench(ctx, t, c, b)
-		},
-	})
+		r.Add(testSpec{
+			Name:  name,
+			Nodes: nodes,
+			Run: func(ctx context.Context, t *test, c *cluster) {
+				runTPCCBench(ctx, t, c, b, e)
+			},
+		})
+	}
 }
 
 // loadTPCCBench loads a TPCC dataset for the specific benchmark spec. The
@@ -218,7 +222,7 @@ func loadTPCCBench(
 // the tool to allow roachtest to create the correct set of VMs required by the
 // test. The `--wipe` flag will prevent this cluster from being destroyed, so it
 // can then be used during future runs.
-func runTPCCBench(ctx context.Context, t *test, c *cluster, b tpccBenchSpec) {
+func runTPCCBench(ctx context.Context, t *test, c *cluster, b tpccBenchSpec, encryption bool) {
 	if b.Geo {
 		// TODO(m-schneider): add support for geo-distributed benchmarking.
 		t.Fatal("geo-distributed benchmarking not supported")
@@ -233,6 +237,7 @@ func runTPCCBench(ctx context.Context, t *test, c *cluster, b tpccBenchSpec) {
 		c.RemountNoBarrier(ctx)
 	}
 
+	encrypt = encryption
 	c.Put(ctx, cockroach, "./cockroach", roachNodes)
 	c.Put(ctx, workload, "./workload", loadNode)
 	c.Start(ctx, roachNodes)
