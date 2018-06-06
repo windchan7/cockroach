@@ -55,7 +55,7 @@ func registerKV(r *registry) {
 			// cluster.
 			// TODO(marc): add back true to turn on encryption for kv when
 			// checksum issue is resolved.
-			for _, e := range []bool{false} {
+			for _, e := range []bool{false, true} {
 				minVersion := "2.0.0"
 				if e {
 					minVersion = "2.1.0"
